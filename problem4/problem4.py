@@ -142,7 +142,7 @@ def apply_pairwise_classifier(pair_results, label_a, label_b, all_files, feats, 
             else:
                 pred_label = label_a if p == 0 else label_b
             preds.append(pred_label)
-        except (ValueError, IndexError, KeyError) as e:
+        except (ValueError, IndexError, KeyError):
             # File not in features or prediction failed
             preds.append(None)
     
@@ -185,7 +185,7 @@ def main():
 
     feats_npz = 'features.npz'
     if not os.path.exists(feats_npz):
-        raise FileNotFoundError(f'Features file {feats_npz} not found.1')
+        raise FileNotFoundError(f'Features file {feats_npz} not found.')
     all_files, feats = load_features(feats_npz)
 
     pair_results = train_pairwise(mapping, all_files, feats)
@@ -240,13 +240,13 @@ def main():
 
     # Part (d): Apply multilabel classifier on pearlite+widmanstatten and martensite
     print('\n' + '='*80)
-    print('Part (d): Pearlite+Widmanstätten and Martensite micrographs')
+    print('Part (d): Pearlite+Widmanstatten and Martensite micrographs')
     print('='*80)
     
     pw_files = mapping.get('pearlite+widmanstatten', [])
     martensite_files = mapping.get('martensite', [])
     
-    print('\n--- Pearlite+Widmanstätten micrographs ---')
+    print('\n--- Pearlite+Widmanstatten micrographs ---')
     if pw_files:
         pw_preds = apply_multilabel_voting(pair_results, all_files, feats, pw_files)
         print(f'\n{"Micrograph":<25} {"Multilabel Prediction":<20}')
