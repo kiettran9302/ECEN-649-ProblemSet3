@@ -19,6 +19,8 @@ IMAGES_DIR = os.path.join(DATA_DIR, 'images')
 MICRO_CSV = os.path.join(DATA_DIR, 'micrograph.csv')
 
 LABELS = ['spheroidite', 'network', 'pearlite', 'spheroidite+widmanstatten']
+# Include all labels for feature extraction
+ALL_LABELS = LABELS + ['pearlite+spheroidite', 'martensite', 'pearlite+widmanstatten']
 LAYER_NAMES = ['block1_pool', 'block2_pool', 'block3_pool', 'block4_pool', 'block5_pool']
 
 def read_micrograph_csv(path=MICRO_CSV):
@@ -26,12 +28,14 @@ def read_micrograph_csv(path=MICRO_CSV):
     df = df[['path', 'primary_microconstituent']].dropna()
     return df
 
-def collect_files_by_label(df):
+def collect_files_by_label(df, labels=None):
+    if labels is None:
+        labels = ALL_LABELS
     mapping = defaultdict(list)
     for _, row in df.iterrows():
         fname = str(row['path']).strip()
         label = str(row['primary_microconstituent']).strip().lower()
-        if label in LABELS:
+        if label in labels:
             mapping[label].append(fname)
     return mapping
 
@@ -81,16 +85,13 @@ def main():
     os.chdir(os.path.dirname(__file__) or '.')
     print('Reading micrograph CSV...')
     df = read_micrograph_csv(MICRO_CSV)
-    mapping = collect_files_by_label(df)
-    for lab in LABELS:
+    mapping = collect_files_by_label(df, labels=ALL_LABELS)
+    for lab in ALL_LABELS:
         print(lab, 'count', len(mapping.get(lab, [])))
 
     feats_npz = 'features.npz'
-    if not os.path.exists(feats_npz):
-        print('Featurizing images (this may take a while)...')
-        featurize_all(mapping, save_path=feats_npz)
-    else:
-        print('Found existing features file', feats_npz)
+    print('Featurizing images (this may take a while)...')
+    featurize_all(mapping, save_path=feats_npz)
 
 if __name__ == '__main__':
     main()
