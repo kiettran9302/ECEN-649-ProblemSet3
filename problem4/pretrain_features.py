@@ -82,6 +82,7 @@ def featurize_all(mapping, save_path='features.npz'):
     return save_path
 
 def main():
+    import sys
     os.chdir(os.path.dirname(__file__) or '.')
     print('Reading micrograph CSV...')
     df = read_micrograph_csv(MICRO_CSV)
@@ -90,8 +91,14 @@ def main():
         print(lab, 'count', len(mapping.get(lab, [])))
 
     feats_npz = 'features.npz'
-    print('Featurizing images (this may take a while)...')
-    featurize_all(mapping, save_path=feats_npz)
+    force_regenerate = '--force' in sys.argv
+    
+    if not os.path.exists(feats_npz) or force_regenerate:
+        print('Featurizing images (this may take a while)...')
+        featurize_all(mapping, save_path=feats_npz)
+    else:
+        print('Found existing features file', feats_npz)
+        print('Use --force to regenerate features')
 
 if __name__ == '__main__':
     main()

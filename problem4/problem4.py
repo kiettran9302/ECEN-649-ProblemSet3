@@ -110,27 +110,7 @@ def train_pairwise(mapping, all_files, feats):
     return pair_results
 
 def multilabel_vote(pair_results, all_files, feats, test_files_all, test_labels_all):
-    pair_keys = list(pair_results.keys())
-    preds = []
-    for f in test_files_all:
-        votes = []
-        for (a, b) in pair_keys:
-            info = pair_results[(a, b)]
-            lname = info['best_layer']
-            clf = info['clf']
-            Xf = get_feature_matrix_for_files([f], all_files, feats, lname)
-            try:
-                p = clf.predict(Xf)[0]
-            except Exception:
-                p = 0
-            voted_label = a if p == 0 else b
-            votes.append(voted_label)
-        vote_counts = Counter(votes)
-        if len(vote_counts) == 0:
-            final = None
-        else:
-            final = vote_counts.most_common(1)[0][0]
-        preds.append(final)
+    preds = apply_multilabel_voting(pair_results, all_files, feats, test_files_all)
     test_err = np.mean([preds[i] != test_labels_all[i] for i in range(len(preds))])
     return preds, test_err
 
@@ -162,7 +142,8 @@ def apply_pairwise_classifier(pair_results, label_a, label_b, all_files, feats, 
             else:
                 pred_label = label_a if p == 0 else label_b
             preds.append(pred_label)
-        except Exception:
+        except (ValueError, IndexError, KeyError) as e:
+            # File not in features or prediction failed
             preds.append(None)
     
     return preds
@@ -182,7 +163,8 @@ def apply_multilabel_voting(pair_results, all_files, feats, test_files):
                 p = clf.predict(Xf)[0]
                 voted_label = a if p == 0 else b
                 votes.append(voted_label)
-            except Exception:
+            except (ValueError, IndexError, KeyError):
+                # File not in features or prediction failed, skip this vote
                 continue
         vote_counts = Counter(votes)
         if len(vote_counts) == 0:
