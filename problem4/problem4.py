@@ -14,7 +14,7 @@ LABELS = ['spheroidite', 'network', 'pearlite', 'spheroidite+widmanstatten']
 TRAIN_COUNTS = {'spheroidite': 100, 'network': 100, 'pearlite': 100, 'spheroidite+widmanstatten': 60}
 LAYER_NAMES = ['block1_pool', 'block2_pool', 'block3_pool', 'block4_pool', 'block5_pool']
 OTHER_LABELS = [
-    'mixed pearlite+spheroidite',
+    'pearlite+spheroidite',
     'pearlite+widmanstatten',
     'martensite'
 ]
@@ -24,12 +24,14 @@ def read_micrograph_csv(path=MICRO_CSV):
     df = df[['path', 'primary_microconstituent']].dropna()
     return df
 
-def collect_files_by_label(df):
+def collect_files_by_label(df, include_others=False):
     mapping = defaultdict(list)
     for _, row in df.iterrows():
         fname = str(row['path']).strip()
         label = str(row['primary_microconstituent']).strip().lower()
         if label in LABELS:
+            mapping[label].append(fname)
+        elif include_others and label in OTHER_LABELS:
             mapping[label].append(fname)
 
     return mapping
@@ -108,44 +110,85 @@ def train_pairwise(mapping, all_files, feats):
     return pair_results
 
 def multilabel_vote(pair_results, all_files, feats, test_files_all, test_labels_all):
+    preds = apply_multilabel_voting(pair_results, all_files, feats, test_files_all)
+    test_err = np.mean([preds[i] != test_labels_all[i] for i in range(len(preds))])
+    return preds, test_err
+
+def apply_pairwise_classifier(pair_results, label_a, label_b, all_files, feats, test_files):
+    """Apply a specific pairwise classifier to test files"""
+    pair_key = (label_a, label_b)
+    if pair_key not in pair_results:
+        # Try reversed key
+        pair_key = (label_b, label_a)
+        reversed_labels = True
+    else:
+        reversed_labels = False
+    
+    if pair_key not in pair_results:
+        return [None] * len(test_files)
+    
+    info = pair_results[pair_key]
+    lname = info['best_layer']
+    clf = info['clf']
+    
+    preds = []
+    for f in test_files:
+        try:
+            Xf = get_feature_matrix_for_files([f], all_files, feats, lname)
+            p = clf.predict(Xf)[0]
+            if reversed_labels:
+                # If we used reversed key, flip the prediction
+                pred_label = label_b if p == 0 else label_a
+            else:
+                pred_label = label_a if p == 0 else label_b
+            preds.append(pred_label)
+        except (ValueError, IndexError, KeyError):
+            # File not in features or prediction failed
+            preds.append(None)
+    
+    return preds
+
+def apply_multilabel_voting(pair_results, all_files, feats, test_files):
+    """Apply multilabel voting classifier to test files"""
     pair_keys = list(pair_results.keys())
     preds = []
-    for f in test_files_all:
+    for f in test_files:
         votes = []
         for (a, b) in pair_keys:
             info = pair_results[(a, b)]
             lname = info['best_layer']
             clf = info['clf']
-            Xf = get_feature_matrix_for_files([f], all_files, feats, lname)
             try:
+                Xf = get_feature_matrix_for_files([f], all_files, feats, lname)
                 p = clf.predict(Xf)[0]
-            except Exception:
-                p = 0
-            voted_label = a if p == 0 else b
-            votes.append(voted_label)
+                voted_label = a if p == 0 else b
+                votes.append(voted_label)
+            except (ValueError, IndexError, KeyError):
+                # File not in features or prediction failed, skip this vote
+                continue
         vote_counts = Counter(votes)
         if len(vote_counts) == 0:
             final = None
         else:
             final = vote_counts.most_common(1)[0][0]
         preds.append(final)
-    test_err = np.mean([preds[i] != test_labels_all[i] for i in range(len(preds))])
-    return preds, test_err
+    return preds
 
 
 def main():
     os.chdir(os.path.dirname(__file__) or '.')
     print('Reading micrograph CSV...')
     df = read_micrograph_csv(MICRO_CSV)
-    mapping = collect_files_by_label(df)
+    mapping = collect_files_by_label(df, include_others=True)
     for lab in LABELS:
         print(lab, 'count', len(mapping.get(lab, [])))
 
     feats_npz = 'features.npz'
     if not os.path.exists(feats_npz):
-        raise FileNotFoundError(f'Features file {feats_npz} not found.1')
+        raise FileNotFoundError(f'Features file {feats_npz} not found.')
     all_files, feats = load_features(feats_npz)
 
+    # Part (a): Train pairwise classifiers
     pair_results = train_pairwise(mapping, all_files, feats)
 
     test_files_all = []
@@ -157,10 +200,64 @@ def main():
         test_files_all.extend(test_files)
         test_labels_all.extend([lab] * len(test_files))
 
+
+    # Part (b): Multilabel voting classifier evaluation
     print('\nEvaluating multilabel voting classifier on combined 4-label test set...')
     preds, multilabel_err = multilabel_vote(pair_results, all_files, feats, test_files_all, test_labels_all)
     print('Multilabel test error:', multilabel_err)
 
+    # Part (c): Apply classifiers on mixed pearlite+spheroidite micrographs
+    
+    # The label in the dataset is 'pearlite+spheroidite'
+    mixed_ps_files = mapping.get('pearlite+spheroidite', [])
+    
+    if mixed_ps_files:
+        # Apply pairwise pearlite vs. spheroidite classifier
+        pairwise_preds = apply_pairwise_classifier(
+            pair_results, 'pearlite', 'spheroidite', 
+            all_files, feats, mixed_ps_files
+        )
+        
+        # Apply multilabel voting classifier
+        multilabel_preds = apply_multilabel_voting(
+            pair_results, all_files, feats, mixed_ps_files
+        )
+        
+        # Print results side by side
+        print(f'\n{"Micrograph":<25} {"Pairwise (P vs S)":<20} {"Multilabel Voting":<20}')
+        print('-' * 65)
+        for i, fname in enumerate(mixed_ps_files):
+            print(f'{fname:<25} {str(pairwise_preds[i]):<20} {str(multilabel_preds[i]):<20}')
+        
+        print(f'- Total micrographs evaluated: {len(mixed_ps_files)}')
+  
+
+    # Part (d): Apply multilabel classifier on pearlite+widmanstatten and martensite
+    
+    pw_files = mapping.get('pearlite+widmanstatten', [])
+    martensite_files = mapping.get('martensite', [])
+    
+    print('\n--- Pearlite+Widmanstatten micrographs ---')
+    if pw_files:
+        pw_preds = apply_multilabel_voting(pair_results, all_files, feats, pw_files)
+        print(f'\n{"Micrograph":<25} {"Multilabel Prediction":<20}')
+        print('-' * 45)
+        for i, fname in enumerate(pw_files):
+            print(f'{fname:<25} {str(pw_preds[i]):<20}')
+        print(f'\nTotal micrographs: {len(pw_files)}')
+    else:
+        print('No pearlite+widmanstatten micrographs found in dataset.')
+    
+    print('\n--- Martensite micrographs ---')
+    if martensite_files:
+        martensite_preds = apply_multilabel_voting(pair_results, all_files, feats, martensite_files)
+        print(f'\n{"Micrograph":<25} {"Multilabel Prediction":<20}')
+        print('-' * 45)
+        for i, fname in enumerate(martensite_files):
+            print(f'{fname:<25} {str(martensite_preds[i]):<20}')
+        print(f'\nTotal micrographs: {len(martensite_files)}')
+    else:
+        print('No martensite micrographs found in dataset.')
 
 if __name__ == '__main__':
     main()
